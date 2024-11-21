@@ -1,5 +1,7 @@
 # FUTO Voice Input
 
+## NOTE: this repository is deprecated, as FUTO created an official mirror on GitHub since then, you can find the up-to-date repo here: https://github.com/futo-org/voice-input
+
 FUTO Voice Input is an application that lets you do speech-to-text on Android, integrating with third party keyboards or apps that use the generic speech-to-text APIs.
 
 To download the application, visit the [FUTO Voice Input page](https://voiceinput.futo.org/). You can also find the contact there to report issues or suggestions.
