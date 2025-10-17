@@ -1,3 +1,6 @@
 [submodule "dep/futopay"]
 	path = dep/futopay
 	url = https://gitlab.futo.org/alex/futopayclientlibraries.git
+[submodule "libs"]
+	path = libs
+	url = https://gitlab.futo.org/keyboard/android-libs.git
