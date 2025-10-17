@@ -185,6 +185,8 @@ android {
             java.srcDir 'src/nonDev/java'
         }
     }
+
+    ndkVersion '28.2.13676358'
     externalNativeBuild {
         cmake {
             path file('src/main/cpp/CMakeLists.txt')
