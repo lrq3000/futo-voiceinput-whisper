@@ -1,3 +1,6 @@
+# v1.3.7
+* Support for devices with 16kb page size
+
 # v1.3.6
 * Updated Google Play billing SDK to latest
 * Updated some other dependencies
