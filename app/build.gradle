@@ -231,13 +231,6 @@ dependencies {
     implementation 'ch.acra:acra-http:5.11.1'
     implementation 'ch.acra:acra-dialog:5.11.1'
 
-    // TODO: Is there an easier way of doing this
-    devImplementation        project(":dep:futopay:android:app")
-    devSameIdImplementation  project(":dep:futopay:android:app")
-    fDroidImplementation     project(":dep:futopay:android:app")
-    standaloneImplementation project(":dep:futopay:android:app")
-
-
     def billing_version = "8.0.0"
     playStoreImplementation "com.android.billingclient:billing:$billing_version"
     playStoreImplementation "com.android.billingclient:billing-ktx:$billing_version"

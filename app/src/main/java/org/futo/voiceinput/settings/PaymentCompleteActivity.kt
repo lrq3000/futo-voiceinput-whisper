@@ -18,7 +18,6 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.launch
 import org.futo.voiceinput.R
-import org.futo.voiceinput.payments.StatePayment
 import org.futo.voiceinput.settings.pages.PaymentThankYouScreen
 import org.futo.voiceinput.settings.pages.ShareFeedbackOption
 import org.futo.voiceinput.startAppActivity
@@ -84,12 +83,8 @@ class PaymentCompleteActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val targetData = intent.dataString
-        if(targetData?.startsWith("futo-voice-input://license/") == true) {
-            if(StatePayment.instance.setPaymentLicenseUrl(targetData)) {
-                onPaid(targetData)
-            } else {
-                onInvalidKey()
-            }
+        if((targetData?.startsWith("futo-keyboard://license/") == true) || (targetData?.startsWith("futo-voice-input://license/") == true)) {
+            onPaid(targetData)
         } else {
             Log.e("PaymentCompleteActivity", "futo-voice-input launched with invalid targetData $targetData")
             finish()
