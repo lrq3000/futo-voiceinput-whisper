@@ -1,5 +1,5 @@
 default:
-  image: "docker.io/abb128/android-build:latest@sha256:8df16e2badb5e42d2f5e3862683c7ff0ebdcc348affe059385e42eebef79302f"
+  image: "gitlab.futo.org:5050/keyboard/latinime/gradle:latest"
 
 variables:
   GIT_SUBMODULE_STRATEGY: recursive
@@ -15,7 +15,7 @@ unit-test-job:
   tags:
     - docker
   script:
-    - gradle testDevDebugUnitTest -s
+    - ./gradlew testDevDebugUnitTest -s
   artifacts:
     reports:
       junit:
@@ -27,9 +27,8 @@ buildDev:
     - docker
   script:
     - ./setUpPropertiesCI.sh
-    - gradle assembleDevRelease -s
+    - ./gradlew assembleDevRelease -s
     - mv app/build/outputs/apk/dev/release/app-dev-release.apk ./app-release-$CI_COMMIT_SHORT_SHA.apk
-    - ./sendZulipMessage.sh "New Voice Input dev build - https://gitlab.futo.org/alex/voiceinput/-/jobs/$CI_JOB_ID/artifacts/raw/app-release-$CI_COMMIT_SHORT_SHA.apk"
   artifacts:
     name: "app-release-$CI_COMMIT_SHORT_SHA"
     paths: 
@@ -42,9 +41,9 @@ buildRelease:
     - docker
   script:
     - ./setUpPropertiesCI.sh
-    - gradle bundlePlayStoreRelease -s
-    - gradle assembleStandaloneRelease -s
-    - gradle assembleFDroidRelease -s
+    - ./gradlew bundlePlayStoreRelease -s
+    - ./gradlew assembleStandaloneRelease -s
+    - ./gradlew assembleFDroidRelease -s
     - mv app/build/outputs/bundle/playStoreRelease/app-playStore-release.aab ./playStore.aab
     - mv app/build/outputs/apk/standalone/release/app-standalone-release.apk ./standalone.apk
     - mv app/build/outputs/apk/fDroid/release/app-fDroid-release.apk ./fdroid.apk

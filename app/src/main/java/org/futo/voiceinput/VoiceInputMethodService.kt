@@ -1,6 +1,7 @@
 package org.futo.voiceinput
 
 import android.content.Context
+import android.content.res.Configuration
 import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.text.InputType
@@ -9,15 +10,15 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.view.inputmethod.InputMethodSubtype
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -28,19 +29,22 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleCoroutineScope
 import androidx.lifecycle.LifecycleOwner
@@ -57,35 +61,43 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.findViewTreeSavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import org.futo.voiceinput.settings.ConditionalUnpaidNoticeInVoiceInputWindow
-import org.futo.voiceinput.ui.theme.WhisperVoiceInputTheme
+import org.futo.voiceinput.migration.scheduleModelMigrationJob
+import org.futo.voiceinput.settings.pages.ConditionalUnpaidNoticeInVoiceInputWindow
+import org.futo.voiceinput.theme.UixThemeAuto
+import org.futo.voiceinput.updates.scheduleUpdateCheckingJob
+
+val SupportsNavbarExtension = Build.VERSION.SDK_INT >= 28
+
+@Composable
+fun navBarHeight(): Dp = with(LocalDensity.current) {
+    if(SupportsNavbarExtension) {
+        WindowInsets.systemBars.getBottom(this).toDp()
+    } else {
+        0.dp
+    }
+}
 
 
 @Composable
-fun RecognizerInputMethodWindow(switchBack: (() -> Unit)? = null, onFinish: () -> Unit = { }, content: @Composable ColumnScope.() -> Unit) {
-    WhisperVoiceInputTheme {
+fun RecognizerInputMethodWindow(switchBack: (() -> Unit)? = null, allowClick: Boolean = false, onPauseVAD: (Boolean) -> Unit = { }, onFinish: () -> Unit = { }, content: @Composable ColumnScope.() -> Unit) {
+    UixThemeAuto(false) {
         Surface(
             modifier = Modifier
+                .recognizerSurfaceClickable(disabled = !allowClick, onPauseVAD = onPauseVAD, onFinish = onFinish)
                 .fillMaxWidth()
-                .wrapContentHeight()
-                .clickable(
-                    enabled = true,
-                    onClickLabel = null,
-                    onClick = onFinish,
-                    role = null,
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ),
+                .wrapContentHeight(),
             color = MaterialTheme.colorScheme.surface
         ) {
             val icon = painterResource(id = R.drawable.futo_o)
+            val bgIconTint = MaterialTheme.colorScheme.outline
+
             Column(
                 modifier = Modifier.padding(0.dp, 0.dp, 0.dp, 64.dp).drawBehind {
                     with(icon) {
                         translate(left = -icon.intrinsicSize.width/2, top = -icon.intrinsicSize.height/2) {
                             translate(left = size.width / 3, top = size.height / 2) {
                                 scale(scaleX = 1.3f, scaleY = 1.3f) {
-                                    draw(icon.intrinsicSize)
+                                    draw(icon.intrinsicSize, colorFilter = ColorFilter.tint(bgIconTint))
                                 }
 
                             }
@@ -122,6 +134,7 @@ fun RecognizerInputMethodWindow(switchBack: (() -> Unit)? = null, onFinish: () -
                 }
 
                 content()
+                Spacer(Modifier.height(navBarHeight()))
             }
         }
     }
@@ -140,7 +153,7 @@ fun RecognizeIMELoadingPreview() {
 @Composable
 fun PreviewRecognizeViewLoadedIME() {
     RecognizerInputMethodWindow(switchBack = { }) {
-        InnerRecognize(onFinish = { })
+        InnerRecognize()
     }
 }
 @Preview
@@ -179,6 +192,9 @@ class VoiceInputMethodService : InputMethodService(), LifecycleOwner, ViewModelS
         super.onCreate()
         mSavedStateRegistryController.performRestore(null)
         handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+
+        scheduleUpdateCheckingJob(applicationContext)
+        scheduleModelMigrationJob(applicationContext)
     }
 
     private val recognizer = object : RecognizerView() {
@@ -264,8 +280,8 @@ class VoiceInputMethodService : InputMethodService(), LifecycleOwner, ViewModelS
         }
 
         @Composable
-        override fun Window(onClose: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-            RecognizerInputMethodWindow(switchBack = onClose, onFinish = { finishRecognizerIfRecording() }) {
+        override fun Window(onClose: () -> Unit, allowClick: Boolean, onPauseVAD: (Boolean) -> Unit, onFinish: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+            RecognizerInputMethodWindow(switchBack = onClose, onPauseVAD = onPauseVAD, onFinish = onFinish, allowClick = allowClick) {
                 content()
             }
         }
@@ -298,6 +314,7 @@ class VoiceInputMethodService : InputMethodService(), LifecycleOwner, ViewModelS
             this@VoiceInputMethodService.setOwners()
         }
 
+        updateNavigationBarVisibility()
         return composeView!!
     }
 
@@ -305,6 +322,14 @@ class VoiceInputMethodService : InputMethodService(), LifecycleOwner, ViewModelS
         // The candidates view shows potential word corrections or suggestions for the user to select.
         // Return null, as the voice input does not need this.
         return null
+    }
+
+    private fun updateNavigationBarVisibility() {
+        if(SupportsNavbarExtension) {
+            window.window?.let { window ->
+                WindowCompat.setDecorFitsSystemWindows(window, false)
+            }
+        }
     }
 
     private var needsInitialization = true
@@ -350,6 +375,11 @@ class VoiceInputMethodService : InputMethodService(), LifecycleOwner, ViewModelS
 
     override fun onCurrentInputMethodSubtypeChanged(newSubtype: InputMethodSubtype) {
         super.onCurrentInputMethodSubtypeChanged(newSubtype)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        updateNavigationBarVisibility()
     }
 
     override fun onDestroy() {

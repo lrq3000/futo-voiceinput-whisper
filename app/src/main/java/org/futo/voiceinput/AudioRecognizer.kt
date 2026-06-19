@@ -26,8 +26,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
+import org.futo.voiceinput.ggml.DecodingMode
 import org.futo.voiceinput.ml.RunState
 import org.futo.voiceinput.ml.WhisperModelWrapper
+import org.futo.voiceinput.settings.BEAM_SEARCH
+import org.futo.voiceinput.settings.DISALLOW_SYMBOLS
+import org.futo.voiceinput.settings.ENABLE_30S_LIMIT
+import org.futo.voiceinput.settings.ENABLE_MULTILINGUAL
+import org.futo.voiceinput.settings.ENGLISH_MODEL_INDEX
+import org.futo.voiceinput.settings.IS_VAD_ENABLED
+import org.futo.voiceinput.settings.LANGUAGE_TOGGLES
+import org.futo.voiceinput.settings.MULTILINGUAL_MODEL_INDEX
+import org.futo.voiceinput.settings.PERSONAL_DICTIONARY
+import org.futo.voiceinput.settings.USE_LANGUAGE_SPECIFIC_MODELS
+import org.futo.voiceinput.settings.getSetting
 import java.io.IOException
 import java.nio.FloatBuffer
 import java.nio.ShortBuffer
@@ -53,10 +65,22 @@ abstract class AudioRecognizer {
 
     private var model: WhisperModelWrapper? = null
 
-    private val floatSamples: FloatBuffer = FloatBuffer.allocate(16000 * 30)
+    private var floatSamples: FloatBuffer = FloatBuffer.allocate(16000 * 30)
     private var recorderJob: Job? = null
     private var modelJob: Job? = null
     private var loadModelJob: Job? = null
+
+    private var canExpandSpace = true
+    private fun expandSpaceIfAllowed(): Boolean {
+        if(canExpandSpace) {
+            // Allocate an extra 30 seconds
+            val newSampleBuffer = FloatBuffer.allocate(floatSamples.capacity() + 16000 * 30)
+            newSampleBuffer.put(floatSamples.array(), 0, floatSamples.capacity() - floatSamples.remaining())
+            floatSamples = newSampleBuffer
+            return true
+        }
+        return false
+    }
 
 
     protected abstract val context: Context
@@ -77,6 +101,11 @@ abstract class AudioRecognizer {
 
     protected abstract fun processing()
 
+    private var isVADPaused = false
+    fun pauseVAD(v: Boolean) {
+        isVADPaused = v
+    }
+
     fun finishRecognizerIfRecording() {
         if (isRecording) {
             finishRecognizer()
@@ -96,6 +125,7 @@ abstract class AudioRecognizer {
     }
 
     fun reset() {
+        isVADPaused = false
         recorder?.stop()
         recorderJob?.cancel()
         modelJob?.cancel()
@@ -155,25 +185,25 @@ abstract class AudioRecognizer {
         }
     }
 
-    private val languages = ValueFromSettings(LANGUAGE_TOGGLES, setOf("en"))
-    private val useMultilingualModel = ValueFromSettings(ENABLE_MULTILINGUAL, false)
-    private val suppressNonSpeech = ValueFromSettings(DISALLOW_SYMBOLS, true)
-    private val englishModelIndex =
-        ValueFromSettings(ENGLISH_MODEL_INDEX, ENGLISH_MODEL_INDEX_DEFAULT)
-    private val multilingualModelIndex =
-        ValueFromSettings(MULTILINGUAL_MODEL_INDEX, MULTILINGUAL_MODEL_INDEX_DEFAULT)
-    private val useVad = ValueFromSettings(IS_VAD_ENABLED, true)
-    private val useSecondary = ValueFromSettings(USE_LANGUAGE_SPECIFIC_MODELS, true)
-
     private suspend fun tryLoadModelOrCancel(primaryModel: ModelData, secondaryModelP: ModelData?) {
-        val secondaryModel = if(useSecondary.get(context)) { secondaryModelP } else { null }
+        val secondaryModel = if(context.getSetting(USE_LANGUAGE_SPECIFIC_MODELS)) { secondaryModelP } else { null }
         try {
             model = WhisperModelWrapper(
                 context,
                 primaryModel,
                 secondaryModel,
-                suppressNonSpeech.get(context),
-                languages.get(context)
+                context.getSetting(DISALLOW_SYMBOLS),
+                context.getSetting(LANGUAGE_TOGGLES),
+                onStatusUpdate = {
+                    decodingStatus(it)
+                },
+                onPartialDecode = {
+                    lifecycleScope.launch {
+                        withContext(Dispatchers.Main) {
+                            partialResult(it)
+                        }
+                    }
+                }
             )
         } catch (e: IOException) {
             context.startModelDownloadActivity(
@@ -188,30 +218,34 @@ abstract class AudioRecognizer {
 
     private suspend fun loadModelInner() {
         try {
+            val englishModelIdx = context.getSetting(ENGLISH_MODEL_INDEX)
+            val multilingualModelIdx = context.getSetting(MULTILINGUAL_MODEL_INDEX)
+            val languages = context.getSetting(LANGUAGE_TOGGLES)
+            val isMultilingual = context.getSetting(ENABLE_MULTILINGUAL)
+
             if (forcedLanguage != null) {
                 tryLoadModelOrCancel(
                     if (forcedLanguage == "en") {
-                        ENGLISH_MODELS[englishModelIndex.get(context)]
+                        ENGLISH_MODELS[englishModelIdx]
                     } else {
-                        MULTILINGUAL_MODELS[multilingualModelIndex.get(context)]
+                        MULTILINGUAL_MODELS[multilingualModelIdx]
                     },
 
                     null
                 )
             } else {
-                val languages = languages.get(context)
-                if (useMultilingualModel.get(context)) {
+                if (isMultilingual) {
                     tryLoadModelOrCancel(
-                        MULTILINGUAL_MODELS[multilingualModelIndex.get(context)],
+                        MULTILINGUAL_MODELS[multilingualModelIdx],
                         if (languages.contains("en")) {
-                            ENGLISH_MODELS[englishModelIndex.get(context)]
+                            ENGLISH_MODELS[englishModelIdx]
                         } else {
                             null
                         }
                     )
                 } else {
                     tryLoadModelOrCancel(
-                        ENGLISH_MODELS[englishModelIndex.get(context)],
+                        ENGLISH_MODELS[englishModelIdx],
                         null
                     )
                 }
@@ -262,17 +296,19 @@ abstract class AudioRecognizer {
         permissionRejected()
     }
 
-    private fun startRecording() {
+    private fun startRecording(numTries: Int = 0) {
         if (isRecording) {
             throw IllegalStateException("Start recording when already recording")
         }
+
+        isVADPaused = false
 
         try {
             recorder = AudioRecord(
                 MediaRecorder.AudioSource.VOICE_RECOGNITION,
                 16000,
                 AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_FLOAT,
+                AudioFormat.ENCODING_PCM_16BIT,
                 16000 * 2 * 5
             )
 
@@ -281,7 +317,12 @@ abstract class AudioRecognizer {
                 recorder = null
 
                 println("Failed to initialize AudioRecord, retrying")
-                return startRecording()
+
+                if(numTries > 32) {
+                    throw IllegalStateException("AudioRecord could not be initialized in 32 tries")
+                }
+
+                return startRecording(numTries + 1)
             }
 
             try {
@@ -308,6 +349,8 @@ abstract class AudioRecognizer {
 
             recorderJob = lifecycleScope.launch {
                 withContext(Dispatchers.Default) {
+                    canExpandSpace = context.getSetting(ENABLE_30S_LIMIT) == false
+
                     var hasTalked = false
                     var anyNoiseAtAll = false
                     var isMicBlocked = false
@@ -321,13 +364,13 @@ abstract class AudioRecognizer {
                         .setSilenceDurationMs(300)
                         .build()
 
-                    val shouldUseVad = useVad.get(context)
+                    val shouldUseVad = context.getSetting(IS_VAD_ENABLED)
                     
                     val vadSampleBuffer = ShortBuffer.allocate(480)
                     var numConsecutiveNonSpeech = 0
                     var numConsecutiveSpeech = 0
 
-                    val samples = FloatArray(1600)
+                    val samples = ShortArray(1600)
 
                     while(isRecording && recorder!!.recordingState == AudioRecord.RECORDSTATE_RECORDING){
                         yield()
@@ -338,13 +381,13 @@ abstract class AudioRecognizer {
 
                         if(!isRecording || recorder!!.recordingState != AudioRecord.RECORDSTATE_RECORDING) break
 
-                        if(floatSamples.remaining() < 1600) {
+                        if(floatSamples.remaining() < 1600 && !expandSpaceIfAllowed()) {
                             withContext(Dispatchers.Main){ finishRecognizer() }
                             break
                         }
 
                         // Run VAD
-                        if(shouldUseVad) {
+                        if(shouldUseVad && !isVADPaused) {
                             var remainingSamples = nRead
                             var offset = 0
                             while(remainingSamples > 0) {
@@ -364,14 +407,16 @@ abstract class AudioRecognizer {
 
                                 val samplesToRead = min(min(remainingSamples, 480), vadSampleBuffer.remaining())
                                 for(i in 0 until samplesToRead) {
-                                    vadSampleBuffer.put((samples[offset] * 32768.0).toInt().toShort())
+                                    vadSampleBuffer.put(samples[offset])
                                     offset += 1
                                     remainingSamples -= 1
                                 }
                             }
+                        } else {
+                            numConsecutiveNonSpeech = 0
                         }
 
-                        floatSamples.put(samples.sliceArray(0 until nRead))
+                        floatSamples.put(samples.sliceArray(0 until nRead).map { it.toFloat() / Short.MAX_VALUE.toFloat() }.toFloatArray())
 
                         // Don't set hasTalked if the start sound may still be playing, otherwise on some
                         // devices the rms just explodes and `hasTalked` is always true
@@ -381,7 +426,7 @@ abstract class AudioRecognizer {
                             numConsecutiveNonSpeech = 0
                         }
 
-                        val rms = sqrt(samples.sumOf { (it * it).toDouble() } / samples.size).toFloat()
+                        val rms = sqrt(samples.sumOf { ((it.toFloat() / Short.MAX_VALUE.toFloat()).pow(2)).toDouble() } / samples.size).toFloat()
 
                         if(startSoundPassed && ((rms > 0.01) || (numConsecutiveSpeech > 8))) hasTalked = true
 
@@ -403,7 +448,7 @@ abstract class AudioRecognizer {
 
                         val magnitude = (1.0f - 0.1f.pow(24.0f * rms))
 
-                        val state = if (floatSamples.remaining() < (16000 * 5)) {
+                        val state = if (!canExpandSpace && floatSamples.remaining() < (16000 * 5)) {
                             MagnitudeState.ENDING_SOON_30S
                         } else if(hasTalked && shouldUseVad && (numConsecutiveNonSpeech > 33)) {
                             MagnitudeState.ENDING_SOON_VAD
@@ -429,11 +474,12 @@ abstract class AudioRecognizer {
                             yield()
                             val nRead2 = recorder!!.read(samples, 0, 1600, AudioRecord.READ_NON_BLOCKING)
                             if(nRead2 > 0) {
-                                if(floatSamples.remaining() < nRead2){
+                                if(floatSamples.remaining() < nRead2 && !expandSpaceIfAllowed()){
+                                    yield()
                                     withContext(Dispatchers.Main){ finishRecognizer() }
                                     break
                                 }
-                                floatSamples.put(samples.sliceArray(0 until nRead2))
+                                floatSamples.put(samples.sliceArray(0 until nRead2).map { it.toFloat() / Short.MAX_VALUE.toFloat() }.toFloatArray())
                             } else {
                                 break
                             }
@@ -466,19 +512,12 @@ abstract class AudioRecognizer {
 
         val floatArray = floatSamples.array().sliceArray(0 until floatSamples.position())
 
-        val onStatusUpdate = { state: RunState ->
-            decodingStatus(state)
-        }
+        val words = context.getSetting(PERSONAL_DICTIONARY)
+        val decodingMode = if(context.getSetting(BEAM_SEARCH)){ DecodingMode.BeamSearch5 } else { DecodingMode.Greedy }
 
         yield()
         val text = try {
-            model!!.run(floatArray, onStatusUpdate, {
-                lifecycleScope.launch {
-                    withContext(Dispatchers.Main) {
-                        partialResult(it)
-                    }
-                }
-            }, forcedLanguage)
+            model!!.run(floatArray, words, forcedLanguage, decodingMode)
         } catch(e: OutOfMemoryError) {
             decodingStatus(RunState.OOMError)
             model!!.close()

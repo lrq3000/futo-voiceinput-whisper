@@ -1,3 +1,38 @@
+# v1.3.6
+* Updated Google Play billing SDK to latest
+* Updated some other dependencies
+* Added notice in payment menu about development status of the app
+* Ported keyboard changes to allow inputs longer than 30 seconds
+
+# v1.3.5
+* Updated Android SDK to latest
+* Support for window insets
+* Updated setup menu
+* Removed deprecated Tensorflow module
+* Fixed a UTF-8 related JNI crash
+
+# v1.3.4
+* Fixed a compatibility issue with some devices causing a crash when used
+* Improvements for TalkBack
+* Updated the payment page design
+* Updated license
+
+# v1.3.3
+* Fixed a bug causing infinite processing
+
+# v1.3.2
+* Replaced tflite with whisper.cpp (tflite still works for a transition period, but is unsupported and will later be removed)
+* Now using fine-tuned models that make use of whisper.cpp audio_ctx parameter for speedup (thanks to whisper.cpp)
+* Added personal dictionary option that make use of prompting (thanks to whisper.cpp)
+* Beam search is now used instead of greedy search (thanks to whisper.cpp)
+* Added English-244
+* General UI improvements and theming
+* You can now tap and hold the mic to prevent automatic stopping
+* Added background model migration, and foreground model migration screen to download updated models
+* Fixed a few minor bugs
+
+Note: some version numbers were skipped
+
 # v1.2.7
 * Fixed issue with sampling invalid tokens, causing decoding to terminate unexpectedly
 * Added option to disable animated circle (for e-ink devices, etc)
